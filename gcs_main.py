@@ -8,6 +8,7 @@ import asyncio
 import rospy
 import uvicorn
 import fastapi
+from fastapi.middleware.cors import CORSMiddleware
 import socketio
 
 # --- ROS Message Types ---
@@ -27,11 +28,30 @@ class GCSGateway:
 
         # 2. 初始化Web服务器和Socket.IO
         self.app = fastapi.FastAPI()
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],  # 允许所有来源的请求
+            allow_credentials=True,
+            allow_methods=["*"],   # 允许所有HTTP方法 (GET, POST, etc.)
+            allow_headers=["*"],   # 允许所有HTTP请求头
+        )
         self.sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
-        self.sio_app = socketio.ASGIApp(self.sio, self.app)
+        print("[INIT] 正在将FastAPI集成到主Socket.IO应用中...")
+        self.main_app = socketio.ASGIApp(
+            self.sio,
+            other_asgi_app=self.app,  # 将FastAPI应用作为后备
+            socketio_path='/sio'  # 明确我们期望的路径
+        )
+        print("[INIT] FastAPI 和 Socket.IO 已创建并集成")
 
         # 3. 初始化ROS节点
-        rospy.init_node('gcs_gateway_node', anonymous=True)
+        print("[INIT] 准备初始化ROS节点 (rospy.init_node)...")
+        try:
+            rospy.init_node('gcs_gateway_node', anonymous=True)
+            print("[INIT] ROS节点初始化成功！")
+        except Exception as e:
+            print(f"!!! 初始化ROS节点失败: {e}")
+            exit()
 
         # 4. 绑定所有事件和回调
         self._bind_sio_events()
@@ -117,7 +137,7 @@ class GCSGateway:
         ros_thread.start()
 
         # 启动Uvicorn Web服务器
-        uvicorn.run(self.app, host="0.0.0.0", port=8000)
+        uvicorn.run(self.main_app, host="0.0.0.0", port=8000)
 
 
 # 主程序入口
