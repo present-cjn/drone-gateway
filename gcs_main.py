@@ -50,10 +50,25 @@ class GCSGateway:
         def disconnect(sid):
             print(f"[Socket.IO] Client disconnected: {sid}")
 
+        @self.sio.on('rtl_command')
+        async def handle_rtl_command(sid, data):
+            """处理从前端收到的返航指令"""
+            print(f"[Socket.IO] Received 'rtl_command' from {sid} with data: {data}")
+
+            # 创建一个ROS消息并发布
+            # 这里的指令内容可以根据你的无人机端逻辑来定义
+            command_str = f"RTL triggered by {sid}"
+            self.command_publisher.publish(String(data=command_str))
+
+            # 向前端发回一个确认消息
+            await self.sio.emit('command_response', {'status': 'OK', 'command': 'RTL'}, to=sid)
+
     def _setup_ros_communications(self):
         """设置所有ROS订阅者和发布者"""
         # 订阅GPS话题
         rospy.Subscriber('/uav/gps/fix', NavSatFix, self._gps_callback)
+        # 创建指令发布者
+        self.command_publisher = rospy.Publisher('/gcs/command', String, queue_size=10)
 
     def _gps_callback(self, message: NavSatFix):
         """ROS回调：当收到GPS消息时更新共享状态"""
