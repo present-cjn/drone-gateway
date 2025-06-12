@@ -6,15 +6,19 @@ import asyncio
 import time
 
 # --- Third-party Libraries ---
-import rospy
 import uvicorn
 import fastapi
 from fastapi.middleware.cors import CORSMiddleware
 import socketio
 
-# --- ROS Message Types ---
-from sensor_msgs.msg import NavSatFix
-from std_msgs.msg import String  # 用作简单的指令消息
+# --- ROS ---
+try:
+    import rospy
+    from sensor_msgs.msg import NavSatFix
+    from std_msgs.msg import String
+except ImportError:
+    print("!!! 错误：无法导入rospy。请确保ROS环境已正确激活！")
+    exit()
 
 
 class GCSGateway:
