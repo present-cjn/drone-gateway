@@ -3,6 +3,7 @@
 # --- Python Standard Libraries ---
 import threading
 import asyncio
+import time
 
 # --- Third-party Libraries ---
 import rospy
@@ -27,8 +28,8 @@ class GCSGateway:
         self.lock = threading.Lock()
 
         # 2. 初始化Web服务器和Socket.IO
-        self.app = fastapi.FastAPI()
-        self.app.add_middleware(
+        self.fastapi_app = fastapi.FastAPI()
+        self.fastapi_app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],  # 允许所有来源的请求
             allow_credentials=True,
@@ -36,13 +37,19 @@ class GCSGateway:
             allow_headers=["*"],   # 允许所有HTTP请求头
         )
         self.sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
-        print("[INIT] 正在将FastAPI集成到主Socket.IO应用中...")
         self.main_app = socketio.ASGIApp(
             self.sio,
-            other_asgi_app=self.app,  # 将FastAPI应用作为后备
+            other_asgi_app=self.fastapi_app,  # 将FastAPI应用作为后备
             socketio_path='/sio'  # 明确我们期望的路径
         )
-        print("[INIT] FastAPI 和 Socket.IO 已创建并集成")
+        # --- 添加一个变量来存储主事件循环，并设置一个启动事件 ---
+        self.main_loop = None
+
+        @self.fastapi_app.on_event("startup")
+        async def app_startup():
+            # 在FastAPI启动时，获取当前正在运行的事件循环
+            self.main_loop = asyncio.get_running_loop()
+            print("--- ✅ 主事件循环已捕获 ---")
 
         # 3. 初始化ROS节点
         print("[INIT] 准备初始化ROS节点 (rospy.init_node)...")
@@ -105,29 +112,24 @@ class GCSGateway:
         pusher_thread.daemon = True
         pusher_thread.start()
 
+    # --- 使用最终的、正确的、非阻塞的跨线程推送方式 ---
     def _telemetry_pusher(self):
-        """后台线程任务：定期推送遥测数据"""
-        # 获取当前线程的事件循环，如果不存在则创建一个
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
         while not rospy.is_shutdown():
+            # 等待主循环被捕获
+            if self.main_loop is None:
+                rospy.sleep(0.5)
+                continue
+
             with self.lock:
-                # 创建共享状态的副本以发送
                 state_copy = self.shared_state.copy()
 
-            # 发射'telemetry_update'事件，并附上数据
-            future = asyncio.run_coroutine_threadsafe(
+            # 将sio.emit作为一个协程，安全地提交给主线程的事件循环去执行
+            print(f"--- 📤 [{time.time()}] [PUSHER] 准备提交emit任务, 数据: {state_copy} ---")
+            asyncio.run_coroutine_threadsafe(
                 self.sio.emit('telemetry_update', state_copy),
-                loop
+                self.main_loop
             )
-            # 等待任务在主事件循环中完成
-            future.result()
-
-            rospy.sleep(0.1)  # 推送频率为10Hz
+            rospy.sleep(0.1)  # 控制推送频率
 
     def run(self):
         """启动整个网关应用"""
